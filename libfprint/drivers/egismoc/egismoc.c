@@ -413,11 +413,14 @@ egismoc_finger_on_sensor_cb (FpiUsbTransfer *transfer,
       return;
     }
 
+  /* ETU906 firmware also emits non-status packets on this endpoint (text
+   * debug logs prefixed "elog", 1-byte fragments). Only a SIGE-prefixed
+   * status can report a finger, so skip anything else and keep waiting. */
   if (transfer->actual_length < 4 + G_N_ELEMENTS (rsp_sensor_has_finger_suffix) ||
       memcmp (transfer->buffer, egismoc_read_prefix, 4) != 0)
     {
-      fpi_ssm_mark_failed (transfer->ssm,
-                           fpi_device_error_new (FP_DEVICE_ERROR_PROTO));
+      fp_dbg ("Ignoring non-status interrupt packet (%zd bytes)", transfer->actual_length);
+      fpi_ssm_jump_to_state (transfer->ssm, WAIT_FINGER_NOT_ON_SENSOR);
       return;
     }
 
@@ -1054,12 +1057,12 @@ egismoc_enroll_check_cb (FpDevice     *device,
     }
 
   /* Check that the read payload reports "not yet enrolled" */
-  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_check_not_yet_enrolled_suffix) &&
+  if (length_in >= EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_check_not_yet_enrolled_suffix) &&
       egismoc_validate_response_suffix (buffer_in, length_in,
                                          rsp_check_not_yet_enrolled_suffix,
                                          G_N_ELEMENTS (rsp_check_not_yet_enrolled_suffix)))
     fpi_ssm_next_state (self->task_ssm);
-  else if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
+  else if (length_in >= EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
            egismoc_validate_response_suffix (buffer_in, length_in,
                                               rsp_identify_match_suffix,
                                               G_N_ELEMENTS (rsp_identify_match_suffix)))
@@ -1327,7 +1330,8 @@ egismoc_identify_check_cb (FpDevice     *device,
     }
 
   /* Check that the read payload indicates "match" */
-  if (length_in == EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
+  /* ETU906 firmware appends extra bytes between (m,id) and the suffix. */
+  if (length_in >= EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + SDCP_MAC_SIZE + SDCP_ENROLLMENT_ID_SIZE + G_N_ELEMENTS (rsp_identify_match_suffix) &&
       egismoc_validate_response_suffix (buffer_in,
                                         length_in,
                                         rsp_identify_match_suffix,
@@ -1347,7 +1351,7 @@ egismoc_identify_check_cb (FpDevice     *device,
                                         SDCP_ENROLLMENT_ID_SIZE);
     }
   /* If device was not successfully read (not a valid "not matched") */
-  else if (length_in != EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_identify_notmatch_suffix) ||
+  else if (length_in < EGISMOC_IDENTIFY_RESPONSE_PREFIX_SIZE + G_N_ELEMENTS (rsp_identify_notmatch_suffix) ||
            !egismoc_validate_response_suffix (buffer_in, length_in,
                                                rsp_identify_notmatch_suffix,
                                                G_N_ELEMENTS (rsp_identify_notmatch_suffix)))
